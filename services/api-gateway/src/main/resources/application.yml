@@ -8,45 +8,21 @@ spring:
     gateway:
       server:
         webflux:
-          # A ROUTE is the basic building block of the gateway. It answers 3 questions:
-          #   1. WHERE to send the request  -> id + uri
-          #   2. WHEN does this route apply -> predicates
-          #   3. WHAT to change on the way  -> filters
           routes:
-            - id: customer-service            # unique name of the route (used in logs and in /actuator/gateway/routes)
-
-              # STATIC target: the backend address is written here (or injected through the
-              # customer-service.url property / CUSTOMER_SERVICE_URL environment variable).
-              # The gateway has no idea how many instances exist: that is the pain point
-              # that Eureka solves in step-03-discovery (uri: lb://customer-service).
-              uri: ${customer-service.url:http://localhost:8081}
-
-              # PREDICATES = the conditions that decide whether an incoming request matches
-              # this route. If several predicates are listed, ALL of them must be true (AND).
-              # If no route matches, the gateway answers 404.
-              # Other common predicates:
-              #   - Method=GET,POST           match on the HTTP method
-              #   - Header=X-Api-Version, 1   match on a request header
-              #   - Query=page                match when a query parameter is present
-              #   - Host=**.ticketflow.com    match on the Host header
-              #   - After=2026-01-01T00:00:00+01:00[Africa/Casablanca]   match after a date
+            - id: customer-service
+              uri: lb://customer-service
               predicates:
-                - Path=/api/customers/**      # any URL starting with /api/customers
-
-              # FILTERS = actions applied to the request BEFORE it is sent to the backend
-              # and/or to the response BEFORE it is returned to the client. They run in the
-              # order they are listed.
-              # Other common filters:
-              #   - AddRequestHeader=X-Request-Source, gateway   add a header to the request
-              #   - StripPrefix=1               remove the first path segment (/api/customers -> /customers)
-              #   - RewritePath=/api/(?<rest>.*), /${rest}       rewrite the path with a regex
-              #   - Retry / CircuitBreaker / RequestRateLimiter  resilience filters (later steps)
+                - Path=/api/customers/**
               filters:
-                - AddResponseHeader=X-Served-By, api-gateway   # add a header to the response
+                - AddResponseHeader=X-Served-By, api-gateway
+
+eureka:
+  client:
+    service-url:
+      defaultZone: http://localhost:8761/eureka/
 
 management:
   endpoints:
     web:
       exposure:
-        # "gateway" exposes /actuator/gateway/routes to list the routes the gateway knows
         include: health,info,gateway

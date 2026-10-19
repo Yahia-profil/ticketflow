@@ -22,9 +22,14 @@ import org.springframework.test.context.DynamicPropertySource;
 
 /**
  * Starts the gateway on a random port and a tiny stub HTTP server standing in for
- * customer-service, so the routing can be tested without running the real service.
+ * customer-service, so the routing can be tested without running Eureka or the real service.
+ * <p>
+ * Eureka is disabled and the in-memory SimpleDiscoveryClient declares the stub as the
+ * only instance of "customer-service", so the {@code lb://} URI resolves without a registry.
  */
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@SpringBootTest(
+        webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
+        properties = "eureka.client.enabled=false")
 class GatewayRoutingTest {
 
     private static final AtomicReference<String> lastBackendPath = new AtomicReference<>();
@@ -51,7 +56,8 @@ class GatewayRoutingTest {
 
     @DynamicPropertySource
     static void backendUrl(DynamicPropertyRegistry registry) {
-        registry.add("customer-service.url", () -> "http://127.0.0.1:" + backend.getAddress().getPort());
+        registry.add("spring.cloud.discovery.client.simple.instances.customer-service[0].uri",
+                () -> "http://127.0.0.1:" + backend.getAddress().getPort());
     }
 
     @AfterAll

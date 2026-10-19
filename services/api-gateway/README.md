@@ -7,31 +7,36 @@ Spring Cloud Gateway (WebFlux flavour) as a reverse proxy. A **route** =
 an id + a target `uri` + **predicates** (when does it match?) + **filters**
 (what do we change on the way?).
 
-In this step the routes are **static**: the address of every service is
-written in the configuration. That is on purpose; see the exercise below
-to feel why it does not scale.
+In this step the target uses the **`lb://` scheme**: the gateway asks Eureka
+for an instance of `customer-service` and Spring Cloud LoadBalancer picks one.
+The route declaration itself is unchanged from the static version — only the
+way the address is resolved moved from "written down" to "discovered".
 
 ## Overview
 - **Port:** 8080
-- **Depends on:** `customer-service` (8081)
+- **Depends on:** `discovery-server` (8761) and `customer-service` (8081)
 - **Runtime:** WebFlux on Netty (not Tomcat)
 
 | Route | Predicate | Target |
 |---|---|---|
-| `customer-service` | `Path=/api/customers/**` | `http://localhost:8081` |
+| `customer-service` | `Path=/api/customers/**` | `lb://customer-service` |
 
 Filter used: `AddResponseHeader=X-Served-By, api-gateway`.
 
-The target can be overridden with the `customer-service.url` property or the
-`CUSTOMER_SERVICE_URL` environment variable (this is what Docker Compose does).
+`lb://customer-service` means: look up `customer-service` in the Eureka
+registry and let LoadBalancer choose one instance. The registry URL is
+configured with `eureka.client.service-url.defaultZone`.
 
 ## Run locally
-Terminal 1:
+Start Eureka first, then the business services, then the gateway:
 
+    # Terminal 1 — registry
+    ./mvnw -pl services/discovery-server spring-boot:run
+
+    # Terminal 2 — business service
     ./mvnw -pl services/customer-service spring-boot:run
 
-Terminal 2:
-
+    # Terminal 3 — gateway
     ./mvnw -pl services/api-gateway spring-boot:run
 
 Call customer-service **through the gateway** (port 8080, not 8081):
@@ -47,22 +52,25 @@ gateway knows about:
 
     curl localhost:8080/actuator/gateway/routes
 
+The `uri` field should read `lb://customer-service`. On the Eureka dashboard
+(<http://localhost:8761>) both `API-GATEWAY` and `CUSTOMER-SERVICE` appear as UP.
+
 ## Run with Docker
     docker compose -f infra/docker-compose.yml up --build
 
 ## Run the tests
     ./mvnw -pl services/api-gateway test
 
-The test starts the gateway and a stub backend, so `customer-service` does not need to run.
+The test starts the gateway and a stub backend, so Eureka and
+`customer-service` do not need to run. The test overrides the target URI
+through the `customer-service.url` property.
 
-## Exercise
-1. Add a second route for `/api/events/**` pointing to `http://localhost:8082`.
-   What does the gateway answer while nothing listens on 8082?
-2. Start **two** instances of customer-service (the second one with
-   `--server.port=8083`). Can the gateway spread requests over both? Why not?
-   What would you need to change every time an instance moves or scales?
-   (This question is answered in `step-03-discovery`.)
-3. Add a `StripPrefix=1` filter and see how the path received by the backend changes.
+## How the gateway finds its target
+1. On startup the gateway registers itself with Eureka as `api-gateway`.
+2. Every ~30 s it fetches the registry and caches the list of instances.
+3. When a request matches `Path=/api/customers/**`, LoadBalancer picks one
+   `customer-service` instance from the cache and forwards the HTTP call
+   **directly** to it (Eureka is not on the data path).
 
 ## Common pitfalls
 - Spring Cloud 2025.1 renamed the properties: routes live under
@@ -71,4 +79,8 @@ The test starts the gateway and a stub backend, so `customer-service` does not n
 - Never add `spring-boot-starter-web` (Tomcat/MVC) next to the WebFlux gateway:
   the two models conflict and the application fails to start.
 - A 404 from the gateway means no route matched; a 5xx (502/503) means a route
-  matched but the backend is unreachable.
+  matched but the backend is unreachable — or, right after startup, the registry
+  cache is still empty.
+- Inside Docker, `localhost` is the container itself; the Compose file sets
+  `EUREKA_CLIENT_SERVICEURL_DEFAULTZONE` to point at the `discovery-server`
+  service name.

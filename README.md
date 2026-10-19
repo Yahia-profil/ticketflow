@@ -26,8 +26,8 @@ bookings, unreliable payment providers, and asynchronous notifications.
 | Module | Role | Key technology | Status |
 |---|---|---|---|
 | `customer-service` | Customer profiles (CRUD) | Spring Web, JPA | Done |
-| `api-gateway` | Single entry point, routing, rate limiting | Spring Cloud Gateway | In progress |
-| `discovery-server` | Service registry | Eureka | Planned |
+| `api-gateway` | Single entry point, routing, rate limiting | Spring Cloud Gateway | Done |
+| `discovery-server` | Service registry | Eureka | Done |
 | `event-service` | Events and seats catalog | Spring Web, JPA | Planned |
 | `config-server` | Centralized configuration | Spring Cloud Config | Planned |
 | `booking-service` | Booking and seat locking | OpenFeign, Resilience4J | Planned |
