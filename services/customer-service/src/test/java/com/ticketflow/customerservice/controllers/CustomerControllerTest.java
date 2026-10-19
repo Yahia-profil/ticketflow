@@ -16,7 +16,14 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
-@SpringBootTest(properties = "eureka.client.enabled=false")
+@SpringBootTest(properties = {
+    "spring.config.import=optional:configserver:http://localhost:8888",
+    "spring.cloud.config.enabled=false",
+    "eureka.client.enabled=false",
+    "server.port=0",
+    "ticketflow.message=test-message",
+    "management.endpoints.web.exposure.include=health,info"
+})
 @AutoConfigureMockMvc
 class CustomerControllerTest {
 

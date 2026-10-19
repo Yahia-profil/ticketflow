@@ -29,7 +29,18 @@ import org.springframework.test.context.DynamicPropertySource;
  */
 @SpringBootTest(
         webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
-        properties = "eureka.client.enabled=false")
+        properties = {
+            "spring.config.import=optional:configserver:http://localhost:8888",
+            "spring.cloud.config.enabled=false",
+            "eureka.client.enabled=false",
+            "server.port=0",
+            "management.endpoints.web.exposure.include=health,info,gateway",
+            "management.endpoint.gateway.access=read_only",
+            "spring.cloud.gateway.server.webflux.routes[0].id=customer-service",
+            "spring.cloud.gateway.server.webflux.routes[0].uri=${test.backend.url}",
+            "spring.cloud.gateway.server.webflux.routes[0].predicates[0]=Path=/api/customers/**",
+            "spring.cloud.gateway.server.webflux.routes[0].filters[0]=AddResponseHeader=X-Served-By, api-gateway"
+        })
 class GatewayRoutingTest {
 
     private static final AtomicReference<String> lastBackendPath = new AtomicReference<>();
@@ -56,6 +67,7 @@ class GatewayRoutingTest {
 
     @DynamicPropertySource
     static void backendUrl(DynamicPropertyRegistry registry) {
+        registry.add("test.backend.url", () -> "http://127.0.0.1:" + backend.getAddress().getPort());
         registry.add("spring.cloud.discovery.client.simple.instances.customer-service[0].uri",
                 () -> "http://127.0.0.1:" + backend.getAddress().getPort());
     }

@@ -1,0 +1,6 @@
+# Test-only overrides: make Config Server optional and disable Eureka
+spring.config.import=optional:configserver:http://localhost:8888
+eureka.client.enabled=false
+server.port=0
+management.endpoints.web.exposure.include=health,info,gateway
+management.endpoint.gateway.access=read_only

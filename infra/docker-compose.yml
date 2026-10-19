@@ -1,4 +1,14 @@
 services:
+  config-server:
+    build:
+      context: ..
+      dockerfile: services/config-server/Dockerfile
+    container_name: config-server
+    ports:
+      - "8888:8888"
+    environment:
+      CONFIG_GIT_URI: ${CONFIG_GIT_URI:-https://github.com/kahaidous/ticketflow-config.git}
+
   discovery-server:
     build:
       context: ..
@@ -15,10 +25,10 @@ services:
     ports:
       - "8081:8081"
     environment:
-      # Inside a container localhost is the container itself, so customer-service
-      # must address the Eureka server by its Compose service name.
+      SPRING_CONFIG_IMPORT: "configserver:http://config-server:8888"
       EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://discovery-server:8761/eureka/
     depends_on:
+      - config-server
       - discovery-server
 
   api-gateway:
@@ -29,7 +39,9 @@ services:
     ports:
       - "8080:8080"
     environment:
+      SPRING_CONFIG_IMPORT: "configserver:http://config-server:8888"
       EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://discovery-server:8761/eureka/
     depends_on:
+      - config-server
       - discovery-server
       - customer-service
