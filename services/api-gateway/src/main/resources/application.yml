@@ -6,3 +6,5 @@ spring:
   cloud:
     config:
       label: main
+    refresh:
+      never-refreshable: com.zaxxer.hikari.HikariDataSource,org.springframework.cloud.netflix.eureka.EurekaInstanceConfigBean,org.springframework.cloud.netflix.eureka.EurekaClientConfigBean

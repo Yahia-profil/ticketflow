@@ -60,4 +60,5 @@ Compose passes `CONFIG_GIT_URI` from the host environment.
 - **Files not pushed to GitHub** → Config Server only sees what is on the remote.
 - **Wrong file name** → must match `spring.application.name` exactly.
 - **`optional:` in `spring.config.import`** → clients silently start without config; avoid it in production.
+- **`POST :8081/actuator/refresh` returns 500** (`NullPointerException` in `updateInstanceRemoteStatus`) → Spring Cloud rebinds `@ConfigurationProperties` beans to class defaults first, which erases `eureka.instance.instance-id`. Keep Eureka beans out of the rebinder with `spring.cloud.refresh.never-refreshable` (already set in both clients).
 - **Port/route changes** need a restart; only `@RefreshScope` beans update on `/actuator/refresh`.
