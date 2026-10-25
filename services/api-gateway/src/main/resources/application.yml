@@ -1,0 +1,26 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: api-gateway
+  cloud:
+    gateway:
+      server:
+        webflux:
+          routes:
+            - id: customer-service
+              uri: http://localhost:8081
+              predicates:
+                - Path=/api/customers/**
+              filters:
+                - AddResponseHeader=X-Served-By, api-gateway
+
+management:
+  endpoint:
+    gateway:
+      access: read_only
+  endpoints:
+    web:
+      exposure:
+        include: health,info,gateway
