@@ -7,7 +7,7 @@ services:
     ports:
       - "8888:8888"
     environment:
-      CONFIG_GIT_URI: ${CONFIG_GIT_URI:-https://github.com/kahaidous/ticketflow-config.git}
+      CONFIG_GIT_URI: ${CONFIG_GIT_URI:-https://github.com/Yahia-profil/ticketflow-config.git}
 
   discovery-server:
     build:
@@ -31,6 +31,35 @@ services:
       - config-server
       - discovery-server
 
+  event-service:
+    build:
+      context: ..
+      dockerfile: services/event-service/Dockerfile
+    container_name: event-service
+    ports:
+      - "8082:8082"
+    environment:
+      SPRING_CONFIG_IMPORT: "configserver:http://config-server:8888"
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://discovery-server:8761/eureka/
+    depends_on:
+      - config-server
+      - discovery-server
+
+  booking-service:
+    build:
+      context: ..
+      dockerfile: services/booking-service/Dockerfile
+    container_name: booking-service
+    ports:
+      - "8083:8083"
+    environment:
+      SPRING_CONFIG_IMPORT: "configserver:http://config-server:8888"
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://discovery-server:8761/eureka/
+    depends_on:
+      - config-server
+      - discovery-server
+      - event-service
+
   api-gateway:
     build:
       context: ..
@@ -45,3 +74,5 @@ services:
       - config-server
       - discovery-server
       - customer-service
+      - event-service
+      - booking-service

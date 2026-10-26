@@ -25,6 +25,8 @@
 
     <modules>
         <module>services/customer-service</module>
+        <module>services/event-service</module>
+        <module>services/booking-service</module>
         <module>services/api-gateway</module>
         <module>services/discovery-server</module>
         <module>services/config-server</module>
