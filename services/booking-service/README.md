@@ -53,22 +53,22 @@ terminal, a hold cannot be expired before its deadline.
 
 ## Remote call to event-service (TP4)
 `EventClient` is a declarative OpenFeign client (`@FeignClient(name = "event-service")`,
-`GET /api/events/{id}`). It is injected in `BookingService`, never in the controller, and it
-carries **no `url`**: Eureka and Spring Cloud LoadBalancer resolve the service name, and the
-call never goes through the Gateway.
+`GET /api/events/{id}`). It is injected in `BookingService`, never in the controller. The
+name is resolved by Eureka and Spring Cloud LoadBalancer; the call never goes through the
+Gateway. `ticketflow.clients.event-service.url` is empty by default (`EVENT_SERVICE_URL`
+only exists to bypass Eureka when working on a single service).
 
-`create()` calls it **before** writing anything:
-- the price is not sent by the caller any more: `unitPrice` is read from the event's
-  `ticketPrice`, so a booking can no longer carry an invented price;
-- an event that is not `PUBLISHED` (draft, closed, archived) is refused with 409;
-- a replayed `idempotencyKey` returns the stored booking **without** calling event-service.
+`create()` calls it **before** the idempotency lookup and before any write, exactly as the
+handout asks: when the call succeeds the existing logic runs; a remote error is never
+turned into a reservation. The reservation body keeps its `unitPrice` field, the contract
+of the previous step is not redefined.
 
 | Remote outcome | HTTP returned by booking-service |
 |---|---|
-| `200` with `status=PUBLISHED` | `201` (or `200` on an idempotent replay) |
-| `200` with another status | `409` `{"detail":"Event 12 is CLOSED ..."}` |
-| `404` (Feign `FeignException.NotFound`) | `404`, never turned into a success |
-| connection refused, timeout, `5xx` (`RetryableException`) | `503`, no booking written |
+| `200` | `201`, or `200` on an idempotent replay |
+| `404` (`FeignException.NotFound`) | `404`, empty body, never a success |
+| connection refused, timeout (`RetryableException`) | `503`, empty body, no booking written |
+| circuit open (`CallNotPermittedException`) | `503`, empty body, no booking written |
 
 Timeouts are bounded (`connect-timeout=2000`, `read-timeout=3000` in
 `spring.cloud.openfeign.client.config.default`, overridable from the Config Server): a slow
@@ -77,7 +77,8 @@ producer must not freeze the reservation flow.
 ## Circuit breaker (TP5)
 The Feign call is wrapped in a Resilience4J circuit breaker
 (`spring.cloud.openfeign.circuitbreaker.enabled=true`, one circuit per client thanks to
-`group.enabled=true`):
+`group.enabled=true`). The configured instance is `EventClientgetByIdLong`, the name
+generated for `EventClient#getById(Long)` as in the handout.
 
 | State | Behaviour |
 |---|---|
@@ -85,8 +86,9 @@ The Feign call is wrapped in a Resilience4J circuit breaker
 | OPEN | at 50% failures over at least 5 calls, calls are refused locally (no network) |
 | HALF_OPEN | after 10 s, 3 test calls decide whether it closes again |
 
-Thresholds live in the Config Server (`resilience4j.circuitbreaker.configs.default.*`):
-window 10, minimum 5 calls, 50 %, 10 s open, 3 half-open calls, 4 s time limit.
+Thresholds live in the Config Server
+(`resilience4j.circuitbreaker.instances.EventClientgetByIdLong.*`): window 10, minimum 5
+calls, 50 %, 10 s open, 3 half-open calls, 4 s time limit.
 
 `FeignException.NotFound` is a legitimate answer, not a failure: a series of 404s never
 opens the circuit. Connection refused, timeouts and 5xx do. This has to be declared
@@ -95,21 +97,25 @@ explicitly (`ignore-exceptions` lists `feign.FeignException$NotFound` and
 
 | Situation | HTTP |
 |---|---|
-| event missing (404 from event-service) | `404` |
-| event-service down or slow (`RetryableException`) | `503` |
-| circuit open (`CallNotPermittedException`) | `503` |
+| event missing (404 from event-service) | `404`, empty body |
+| event-service down or slow (`RetryableException`) | `503`, empty body |
+| circuit open (`CallNotPermittedException`) | `503`, empty body |
 
 There is **no fallback**: a broken event-service never produces a fictitious booking.
 
 ### Demo of the opening
-    # event-service stopped; each call needs a fresh idempotencyKey, otherwise the replay
-    # path returns the stored booking with 200 without touching event-service
+    # event-service stopped: the 10 calls fail remotely, the circuit opens, then the calls
+    # are rejected locally. The same body may be repeated thanks to the idempotency key.
     for i in $(seq 1 10); do
       curl -sS -o /dev/null -w "$i HTTP %{http_code} %{time_total}s\n" \
         -X POST localhost:8083/api/bookings -H 'Content-Type: application/json' \
-        -d "{\"eventId\":1,\"customerId\":42,\"quantity\":1,\"idempotencyKey\":\"cb-$i\"}"
+        -d '{"eventId":1,"customerId":42,"quantity":1,"unitPrice":250.00,
+             "idempotencyKey":"cb-1"}'
     done
     curl localhost:8083/actuator/circuitbreakers
+
+    # 404s are ignored: repeat an unknown eventId five times, then book a real event.
+    # The circuit stays CLOSED and the reservation still returns 201.
 
 ## Package layout
     controllers/   REST endpoints
@@ -125,10 +131,11 @@ There is **no fallback**: a broken event-service never produces a fictitious boo
     ./mvnw -pl services/config-server spring-boot:run
     ./mvnw -pl services/booking-service spring-boot:run
 
-    # eventId must exist and be PUBLISHED in event-service.
+    # eventId must exist in event-service.
     curl -i -X POST localhost:8083/api/bookings \
       -H 'Content-Type: application/json' \
-      -d '{"eventId":1,"customerId":42,"quantity":2,"idempotencyKey":"demo-1"}'
+      -d '{"eventId":1,"customerId":42,"quantity":2,"unitPrice":250.00,
+           "idempotencyKey":"demo-1"}'
 
     curl -X POST localhost:8083/api/bookings/1/payment \
       -H 'Content-Type: application/json' -d '{"outcome":"APPROVED"}'
@@ -137,7 +144,7 @@ There is **no fallback**: a broken event-service never produces a fictitious boo
     # unknown event -> 404 ; event-service stopped -> 503
     curl -i -X POST localhost:8083/api/bookings \
       -H 'Content-Type: application/json' \
-      -d '{"eventId":999999,"customerId":42,"quantity":1}'
+      -d '{"eventId":999999,"customerId":42,"quantity":1,"unitPrice":250.00}'
 
 ## Run with Docker
     docker compose -f infra/docker-compose.yml up --build booking-service

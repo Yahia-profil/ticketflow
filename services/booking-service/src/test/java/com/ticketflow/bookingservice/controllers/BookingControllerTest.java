@@ -6,6 +6,7 @@ import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -53,8 +54,7 @@ class BookingControllerTest {
 
     @BeforeEach
     void stubTheRemoteCatalogue() {
-        lenient().when(eventClient.getById(1L)).thenReturn(event(1L, "PUBLISHED", "250.00"));
-        lenient().when(eventClient.getById(2L)).thenReturn(event(2L, "CLOSED", "250.00"));
+        lenient().when(eventClient.getById(1L)).thenReturn(event());
         lenient().when(eventClient.getById(3L)).thenThrow(mock(RetryableException.class));
         lenient().when(eventClient.getById(4L)).thenThrow(mock(CallNotPermittedException.class));
         lenient().when(eventClient.getById(999L)).thenThrow(mock(FeignException.NotFound.class));
@@ -65,14 +65,14 @@ class BookingControllerTest {
     }
 
     private BookingRequest request(Long eventId, Long customerId, int quantity, String key) {
-        return new BookingRequest(eventId, customerId, quantity, key);
+        return new BookingRequest(eventId, customerId, quantity, new BigDecimal("250.00"), key);
     }
 
-    private EventResponse event(Long id, String status, String price) {
+    private EventResponse event() {
         Instant startsAt = Instant.now().plus(Duration.ofDays(10));
-        return new EventResponse(id, "Jazz night", "Live jazz", "CONCERT", "Opera", "Alger",
-                startsAt, startsAt.plus(Duration.ofHours(3)), status,
-                50, 0, 50, new BigDecimal(price), Instant.now());
+        return new EventResponse(1L, "Jazz night", "Live jazz", "CONCERT", "Opera", "Alger",
+                startsAt, startsAt.plus(Duration.ofHours(3)), "PUBLISHED",
+                50, 0, 50, new BigDecimal("250.00"), Instant.now());
     }
 
     private String createAndGetId(Long customerId, int quantity) throws Exception {
@@ -214,16 +214,7 @@ class BookingControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(mapper.writeValueAsString(request(999L, 77L, 1, key()))))
                 .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.detail").value(containsString("event")));
-    }
-
-    @Test
-    void anEventThatIsNotOnSaleIsAConflict() throws Exception {
-        mvc.perform(post("/api/bookings")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(mapper.writeValueAsString(request(2L, 78L, 1, key()))))
-                .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.detail").value(containsString("CLOSED")));
+                .andExpect(content().string(""));
     }
 
     @Test
@@ -231,7 +222,8 @@ class BookingControllerTest {
         mvc.perform(post("/api/bookings")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(mapper.writeValueAsString(request(3L, 79L, 1, key()))))
-                .andExpect(status().isServiceUnavailable());
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(content().string(""));
 
         mvc.perform(get("/api/bookings").param("customerId", "79"))
                 .andExpect(status().isOk())
@@ -244,7 +236,7 @@ class BookingControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(mapper.writeValueAsString(request(4L, 80L, 1, key()))))
                 .andExpect(status().isServiceUnavailable())
-                .andExpect(jsonPath("$.detail").value(containsString("circuit is open")));
+                .andExpect(content().string(""));
 
         mvc.perform(get("/api/bookings").param("customerId", "80"))
                 .andExpect(status().isOk())
@@ -259,12 +251,17 @@ class BookingControllerTest {
 
         mvc.perform(post("/api/bookings")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"eventId\":1,\"customerId\":1,\"quantity\":0}"))
+                        .content("{\"eventId\":1,\"customerId\":1,\"quantity\":0,\"unitPrice\":100}"))
                 .andExpect(status().isBadRequest());
 
         mvc.perform(post("/api/bookings")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"customerId\":1,\"quantity\":1}"))
+                        .content("{\"customerId\":1,\"quantity\":1,\"unitPrice\":100}"))
+                .andExpect(status().isBadRequest());
+
+        mvc.perform(post("/api/bookings")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"eventId\":1,\"customerId\":1,\"quantity\":1}"))
                 .andExpect(status().isBadRequest());
 
         String id = createAndGetId(3L, 1);

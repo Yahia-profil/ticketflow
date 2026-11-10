@@ -17,7 +17,6 @@ import com.ticketflow.bookingservice.entities.Booking;
 import com.ticketflow.bookingservice.entities.BookingStatus;
 import com.ticketflow.bookingservice.entities.BookingTransition;
 import com.ticketflow.bookingservice.exceptions.BookingNotFoundException;
-import com.ticketflow.bookingservice.exceptions.EventNotBookableException;
 import com.ticketflow.bookingservice.exceptions.IdempotencyConflictException;
 import com.ticketflow.bookingservice.exceptions.InvalidBookingStateException;
 import com.ticketflow.bookingservice.repos.BookingRepo;
@@ -27,10 +26,10 @@ import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
-import org.junit.jupiter.api.BeforeEach;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -54,14 +53,14 @@ class BookingServiceTest {
     }
 
     private BookingRequest request(String key) {
-        return new BookingRequest(7L, 42L, 3, key);
+        return new BookingRequest(7L, 42L, 3, new BigDecimal("250.00"), key);
     }
 
-    private EventResponse event(String status, String price) {
+    private EventResponse event() {
         Instant startsAt = Instant.now().plus(Duration.ofDays(10));
         return new EventResponse(7L, "Jazz night", "Live jazz", "CONCERT", "Opera", "Alger",
-                startsAt, startsAt.plus(Duration.ofHours(3)), status,
-                10, 0, 10, new BigDecimal(price), Instant.now());
+                startsAt, startsAt.plus(Duration.ofHours(3)), "PUBLISHED",
+                10, 0, 10, new BigDecimal("250.00"), Instant.now());
     }
 
     private Booking savedBooking(String key) {
@@ -70,9 +69,9 @@ class BookingServiceTest {
     }
 
     @Test
-    void createStartsAPendingHoldWithAFifteenMinuteDeadline() {
+    void createValidatesTheEventThenStartsAPendingHold() {
+        when(eventClient.getById(7L)).thenReturn(event());
         when(bookings.findByIdempotencyKey("k1")).thenReturn(Optional.empty());
-        when(eventClient.getById(7L)).thenReturn(event("PUBLISHED", "250.00"));
         when(bookings.save(any(Booking.class))).thenAnswer(inv -> inv.getArgument(0));
 
         BookingService.CreateResult result = service.create(request("k1"));
@@ -92,33 +91,7 @@ class BookingServiceTest {
     }
 
     @Test
-    void thePriceComesFromEventServiceNotFromTheCaller() {
-        when(bookings.findByIdempotencyKey("k1")).thenReturn(Optional.empty());
-        when(eventClient.getById(7L)).thenReturn(event("PUBLISHED", "300.00"));
-        when(bookings.save(any(Booking.class))).thenAnswer(inv -> inv.getArgument(0));
-
-        BookingService.CreateResult result = service.create(request("k1"));
-
-        assertThat(result.booking().getUnitPrice()).isEqualByComparingTo("300.00");
-        assertThat(result.booking().getTotalAmount()).isEqualByComparingTo("900.00");
-    }
-
-    @Test
-    void anEventThatIsNotPublishedIsRefusedBeforeAnyWrite() {
-        when(bookings.findByIdempotencyKey("k1")).thenReturn(Optional.empty());
-        when(eventClient.getById(7L)).thenReturn(event("CLOSED", "250.00"));
-
-        assertThatThrownBy(() -> service.create(request("k1")))
-                .isInstanceOf(EventNotBookableException.class)
-                .hasMessageContaining("CLOSED");
-
-        verify(bookings, never()).save(any());
-        verify(transitions, never()).save(any());
-    }
-
-    @Test
     void aRemoteNotFoundIsPropagatedAndNothingIsWritten() {
-        when(bookings.findByIdempotencyKey("k1")).thenReturn(Optional.empty());
         when(eventClient.getById(7L)).thenThrow(mock(FeignException.NotFound.class));
 
         assertThatThrownBy(() -> service.create(request("k1")))
@@ -130,8 +103,8 @@ class BookingServiceTest {
 
     @Test
     void aMissingKeyIsGeneratedForTheCaller() {
+        when(eventClient.getById(7L)).thenReturn(event());
         when(bookings.findByIdempotencyKey(any())).thenReturn(Optional.empty());
-        when(eventClient.getById(7L)).thenReturn(event("PUBLISHED", "250.00"));
         when(bookings.save(any(Booking.class))).thenAnswer(inv -> inv.getArgument(0));
 
         BookingService.CreateResult result = service.create(request(null));
@@ -142,23 +115,27 @@ class BookingServiceTest {
     @Test
     void replayingTheSamePayloadReturnsTheOriginalBooking() {
         Booking original = savedBooking("k1");
+        when(eventClient.getById(7L)).thenReturn(event());
         when(bookings.findByIdempotencyKey("k1")).thenReturn(Optional.of(original));
 
         BookingService.CreateResult result = service.create(request("k1"));
 
         assertThat(result.replayed()).isTrue();
         assertThat(result.booking()).isSameAs(original);
-        verify(eventClient, never()).getById(any());
         verify(bookings, never()).save(any());
         verify(transitions, never()).save(any());
     }
 
     @Test
     void replayingADifferentPayloadIsAConflict() {
+        when(eventClient.getById(999L)).thenReturn(event());
         when(bookings.findByIdempotencyKey("k1")).thenReturn(Optional.of(savedBooking("k1")));
 
-        assertThatThrownBy(() -> service.create(new BookingRequest(999L, 42L, 3, "k1")))
+        assertThatThrownBy(() -> service.create(new BookingRequest(
+                999L, 42L, 3, new BigDecimal("250.00"), "k1")))
                 .isInstanceOf(IdempotencyConflictException.class);
+
+        verify(bookings, never()).save(any());
     }
 
     @Test
@@ -267,6 +244,4 @@ class BookingServiceTest {
 
         assertThatThrownBy(() -> service.get(9L)).isInstanceOf(BookingNotFoundException.class);
     }
-
-
 }

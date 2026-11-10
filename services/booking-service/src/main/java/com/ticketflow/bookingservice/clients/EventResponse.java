@@ -25,9 +25,4 @@ public record EventResponse(
         int availableCapacity,
         BigDecimal ticketPrice,
         Instant createdAt) {
-
-    /** Only a published event can be booked; closed, draft or archived ones cannot. */
-    public boolean isPublished() {
-        return "PUBLISHED".equalsIgnoreCase(status);
-    }
 }
