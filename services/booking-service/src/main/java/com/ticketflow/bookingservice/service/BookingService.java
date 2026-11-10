@@ -1,5 +1,7 @@
 package com.ticketflow.bookingservice.service;
 
+import com.ticketflow.bookingservice.clients.EventClient;
+import com.ticketflow.bookingservice.clients.EventResponse;
 import com.ticketflow.bookingservice.dto.BookingRequest;
 import com.ticketflow.bookingservice.dto.PaymentRequest;
 import com.ticketflow.bookingservice.dto.TransitionResponse;
@@ -8,10 +10,12 @@ import com.ticketflow.bookingservice.entities.BookingStatus;
 import com.ticketflow.bookingservice.entities.BookingTransition;
 import com.ticketflow.bookingservice.entities.PaymentOutcome;
 import com.ticketflow.bookingservice.exceptions.BookingNotFoundException;
+import com.ticketflow.bookingservice.exceptions.EventNotBookableException;
 import com.ticketflow.bookingservice.exceptions.IdempotencyConflictException;
 import com.ticketflow.bookingservice.exceptions.InvalidBookingStateException;
 import com.ticketflow.bookingservice.repos.BookingRepo;
 import com.ticketflow.bookingservice.repos.BookingTransitionRepo;
+import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.EnumSet;
@@ -45,10 +49,12 @@ public class BookingService {
 
     private final BookingRepo bookings;
     private final BookingTransitionRepo transitions;
+    private final EventClient eventClient;
     private final Duration holdDuration;
 
     public BookingService(BookingRepo bookings,
                           BookingTransitionRepo transitions,
+                          EventClient eventClient,
                           @Value("${ticketflow.booking.hold-duration:PT15M}") String holdDuration) {
         this.holdDuration = Duration.parse(holdDuration);
         if (this.holdDuration.isZero() || this.holdDuration.isNegative()) {
@@ -56,9 +62,13 @@ public class BookingService {
         }
         this.bookings = bookings;
         this.transitions = transitions;
+        this.eventClient = eventClient;
     }
 
-    /** A replayed request returns the original booking instead of creating a second one. */
+    /**
+     * A replayed request returns the original booking instead of creating a second one, and
+     * does not call event-service again. A new booking first validates the event remotely.
+     */
     public record CreateResult(Booking booking, boolean replayed) {
     }
 
@@ -76,12 +86,20 @@ public class BookingService {
             return new CreateResult(existing, true);
         }
 
+        // Remote read before writing anything: a missing event surfaces as a 404 and an event
+        // that is not on sale is refused, never turned into a fictitious reservation.
+        EventResponse event = eventClient.getById(request.eventId());
+        if (!event.isPublished()) {
+            throw new EventNotBookableException(request.eventId(), event.status());
+        }
+        BigDecimal unitPrice = event.ticketPrice();
+
         Instant now = Instant.now();
         Booking booking = bookings.save(new Booking(
                 request.customerId(),
                 request.eventId(),
                 request.quantity(),
-                request.unitPrice(),
+                unitPrice,
                 key,
                 now,
                 now.plus(holdDuration)));
@@ -208,7 +226,6 @@ public class BookingService {
     private static boolean samePayload(Booking existing, BookingRequest request) {
         return existing.getEventId().equals(request.eventId())
                 && existing.getCustomerId().equals(request.customerId())
-                && existing.getQuantity() == request.quantity()
-                && existing.getUnitPrice().compareTo(request.unitPrice()) == 0;
+                && existing.getQuantity() == request.quantity();
     }
 }

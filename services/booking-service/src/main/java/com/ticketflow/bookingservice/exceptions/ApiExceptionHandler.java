@@ -1,5 +1,7 @@
 package com.ticketflow.bookingservice.exceptions;
 
+import feign.FeignException;
+import feign.RetryableException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -15,7 +17,25 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         return ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, ex.getMessage());
     }
 
-    @ExceptionHandler({InvalidBookingStateException.class, IdempotencyConflictException.class})
+    /** event-service answered 404: the event does not exist, the remote status is kept. */
+    @ExceptionHandler(FeignException.NotFound.class)
+    ProblemDetail handleRemoteNotFound(FeignException.NotFound ex) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND,
+                "The requested event does not exist");
+    }
+
+    /**
+     * Connection refused, timeout or a 5xx from event-service: the booking cannot be
+     * validated, so the caller gets an explicit 503 instead of a fictitious success.
+     */
+    @ExceptionHandler({RetryableException.class, FeignException.class})
+    ProblemDetail handleRemoteFailure(FeignException ex) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.SERVICE_UNAVAILABLE,
+                "event-service is unavailable, the reservation was not created");
+    }
+
+    @ExceptionHandler({InvalidBookingStateException.class, IdempotencyConflictException.class,
+            EventNotBookableException.class})
     ProblemDetail handleConflict(RuntimeException ex) {
         return ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, ex.getMessage());
     }
