@@ -16,6 +16,7 @@ import com.ticketflow.bookingservice.clients.EventResponse;
 import com.ticketflow.bookingservice.dto.BookingRequest;
 import feign.FeignException;
 import feign.RetryableException;
+import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
@@ -55,6 +56,7 @@ class BookingControllerTest {
         lenient().when(eventClient.getById(1L)).thenReturn(event(1L, "PUBLISHED", "250.00"));
         lenient().when(eventClient.getById(2L)).thenReturn(event(2L, "CLOSED", "250.00"));
         lenient().when(eventClient.getById(3L)).thenThrow(mock(RetryableException.class));
+        lenient().when(eventClient.getById(4L)).thenThrow(mock(CallNotPermittedException.class));
         lenient().when(eventClient.getById(999L)).thenThrow(mock(FeignException.NotFound.class));
     }
 
@@ -232,6 +234,19 @@ class BookingControllerTest {
                 .andExpect(status().isServiceUnavailable());
 
         mvc.perform(get("/api/bookings").param("customerId", "79"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$").isEmpty());
+    }
+
+    @Test
+    void anOpenCircuitIsA503AndCreatesNothing() throws Exception {
+        mvc.perform(post("/api/bookings")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(mapper.writeValueAsString(request(4L, 80L, 1, key()))))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.detail").value(containsString("circuit is open")));
+
+        mvc.perform(get("/api/bookings").param("customerId", "80"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$").isEmpty());
     }

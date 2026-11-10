@@ -30,7 +30,7 @@ bookings, unreliable payment providers, and asynchronous notifications.
 | `api-gateway` | Single entry point, routing, rate limiting | Spring Cloud Gateway | Done |
 | `discovery-server` | Service registry | Eureka | Done |
 | `config-server` | Centralized configuration | Spring Cloud Config | Done |
-| `booking-service` | Booking lifecycle, holds, audit trail | Spring Web, JPA | In progress (OpenFeign next) |
+| `booking-service` | Booking lifecycle, holds, audit trail | Spring Web, JPA, OpenFeign, Resilience4J | Done |
 | `payment-service` | Simulated payment provider (random failures) | Resilience4J | Planned |
 | `notification-service` | Confirmation emails/SMS | Kafka consumer | Planned |
 | `ai-assistant-service` | Natural-language search, recommendations | Spring AI | Later |

@@ -74,6 +74,43 @@ Timeouts are bounded (`connect-timeout=2000`, `read-timeout=3000` in
 `spring.cloud.openfeign.client.config.default`, overridable from the Config Server): a slow
 producer must not freeze the reservation flow.
 
+## Circuit breaker (TP5)
+The Feign call is wrapped in a Resilience4J circuit breaker
+(`spring.cloud.openfeign.circuitbreaker.enabled=true`, one circuit per client thanks to
+`group.enabled=true`):
+
+| State | Behaviour |
+|---|---|
+| CLOSED | calls go through, failures counted in a 10-call sliding window |
+| OPEN | at 50% failures over at least 5 calls, calls are refused locally (no network) |
+| HALF_OPEN | after 10 s, 3 test calls decide whether it closes again |
+
+Thresholds live in the Config Server (`resilience4j.circuitbreaker.configs.default.*`):
+window 10, minimum 5 calls, 50 %, 10 s open, 3 half-open calls, 4 s time limit.
+
+`FeignException.NotFound` is a legitimate answer, not a failure: a series of 404s never
+opens the circuit. Connection refused, timeouts and 5xx do. This has to be declared
+explicitly (`ignore-exceptions` lists `feign.FeignException$NotFound` and
+`feign.FeignException$BadRequest`), because Resilience4J counts every other exception.
+
+| Situation | HTTP |
+|---|---|
+| event missing (404 from event-service) | `404` |
+| event-service down or slow (`RetryableException`) | `503` |
+| circuit open (`CallNotPermittedException`) | `503` |
+
+There is **no fallback**: a broken event-service never produces a fictitious booking.
+
+### Demo of the opening
+    # event-service stopped; each call needs a fresh idempotencyKey, otherwise the replay
+    # path returns the stored booking with 200 without touching event-service
+    for i in $(seq 1 10); do
+      curl -sS -o /dev/null -w "$i HTTP %{http_code} %{time_total}s\n" \
+        -X POST localhost:8083/api/bookings -H 'Content-Type: application/json' \
+        -d "{\"eventId\":1,\"customerId\":42,\"quantity\":1,\"idempotencyKey\":\"cb-$i\"}"
+    done
+    curl localhost:8083/actuator/circuitbreakers
+
 ## Package layout
     controllers/   REST endpoints
     clients/       OpenFeign client + read-only mirror of the event JSON

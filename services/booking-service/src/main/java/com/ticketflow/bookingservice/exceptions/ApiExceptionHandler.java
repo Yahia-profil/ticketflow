@@ -2,6 +2,7 @@ package com.ticketflow.bookingservice.exceptions;
 
 import feign.FeignException;
 import feign.RetryableException;
+import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -32,6 +33,16 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
     ProblemDetail handleRemoteFailure(FeignException ex) {
         return ProblemDetail.forStatusAndDetail(HttpStatus.SERVICE_UNAVAILABLE,
                 "event-service is unavailable, the reservation was not created");
+    }
+
+    /**
+     * The circuit is OPEN: the call is refused locally, without any network access. There
+     * is deliberately no fallback that would pretend the event is available.
+     */
+    @ExceptionHandler(CallNotPermittedException.class)
+    ProblemDetail handleOpenCircuit(CallNotPermittedException ex) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.SERVICE_UNAVAILABLE,
+                "event-service circuit is open, the reservation was not created");
     }
 
     @ExceptionHandler({InvalidBookingStateException.class, IdempotencyConflictException.class,
