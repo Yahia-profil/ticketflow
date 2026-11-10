@@ -10,12 +10,10 @@ import com.ticketflow.bookingservice.entities.BookingStatus;
 import com.ticketflow.bookingservice.entities.BookingTransition;
 import com.ticketflow.bookingservice.entities.PaymentOutcome;
 import com.ticketflow.bookingservice.exceptions.BookingNotFoundException;
-import com.ticketflow.bookingservice.exceptions.EventNotBookableException;
 import com.ticketflow.bookingservice.exceptions.IdempotencyConflictException;
 import com.ticketflow.bookingservice.exceptions.InvalidBookingStateException;
 import com.ticketflow.bookingservice.repos.BookingRepo;
 import com.ticketflow.bookingservice.repos.BookingTransitionRepo;
-import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.EnumSet;
@@ -66,8 +64,10 @@ public class BookingService {
     }
 
     /**
-     * A replayed request returns the original booking instead of creating a second one, and
-     * does not call event-service again. A new booking first validates the event remotely.
+     * The event is validated remotely before any write, as required by the TP: if the call
+     * succeeds the existing logic runs; a 404 or an unreachable event-service is propagated
+     * and mapped to 404/503, never to a success. A replayed request then returns the
+     * original booking instead of creating a second one.
      */
     public record CreateResult(Booking booking, boolean replayed) {
     }
@@ -76,6 +76,8 @@ public class BookingService {
         String key = request.idempotencyKey() == null || request.idempotencyKey().isBlank()
                 ? UUID.randomUUID().toString()
                 : request.idempotencyKey().trim();
+
+        eventClient.getById(request.eventId());
 
         Booking existing = bookings.findByIdempotencyKey(key).orElse(null);
         if (existing != null) {
@@ -86,20 +88,12 @@ public class BookingService {
             return new CreateResult(existing, true);
         }
 
-        // Remote read before writing anything: a missing event surfaces as a 404 and an event
-        // that is not on sale is refused, never turned into a fictitious reservation.
-        EventResponse event = eventClient.getById(request.eventId());
-        if (!event.isPublished()) {
-            throw new EventNotBookableException(request.eventId(), event.status());
-        }
-        BigDecimal unitPrice = event.ticketPrice();
-
         Instant now = Instant.now();
         Booking booking = bookings.save(new Booking(
                 request.customerId(),
                 request.eventId(),
                 request.quantity(),
-                unitPrice,
+                request.unitPrice(),
                 key,
                 now,
                 now.plus(holdDuration)));
@@ -226,6 +220,7 @@ public class BookingService {
     private static boolean samePayload(Booking existing, BookingRequest request) {
         return existing.getEventId().equals(request.eventId())
                 && existing.getCustomerId().equals(request.customerId())
-                && existing.getQuantity() == request.quantity();
+                && existing.getQuantity() == request.quantity()
+                && existing.getUnitPrice().compareTo(request.unitPrice()) == 0;
     }
 }

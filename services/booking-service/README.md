@@ -24,51 +24,49 @@ and a hold on the seats expires on its own after a configurable delay.
 | POST | `/api/bookings/{id}/expire` | Expire an overdue hold by hand |
 
 Payment outcomes (`POST .../payment`, body `{"outcome":"..."}`):
-- `APPROVED` → `CONFIRMED`
-- `DECLINED` → `PAYMENT_FAILED`
-- `UNAVAILABLE` → stays `PENDING_PAYMENT`, the call can be retried
+- `APPROVED` Ã¢â€ â€™ `CONFIRMED`
+- `DECLINED` Ã¢â€ â€™ `PAYMENT_FAILED`
+- `UNAVAILABLE` Ã¢â€ â€™ stays `PENDING_PAYMENT`, the call can be retried
 
 ## State machine
                 payment approved
-    PENDING_PAYMENT ──────────────► CONFIRMED
-       │      │  │                    │
-       │      │  └── cancel ──────────┼──► CANCELLED
-       │      │                       │
-       │      ├── DECLINED ──► PAYMENT_FAILED ──► CANCELLED
-       │      │
-       │      └── hold elapsed ──► EXPIRED
-       └── cancel ──► CANCELLED
+    PENDING_PAYMENT Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€“Âº CONFIRMED
+       Ã¢â€â€š      Ã¢â€â€š  Ã¢â€â€š                    Ã¢â€â€š
+       Ã¢â€â€š      Ã¢â€â€š  Ã¢â€â€Ã¢â€â‚¬Ã¢â€â‚¬ cancel Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€Â¼Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€“Âº CANCELLED
+       Ã¢â€â€š      Ã¢â€â€š                       Ã¢â€â€š
+       Ã¢â€â€š      Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ DECLINED Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€“Âº PAYMENT_FAILED Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€“Âº CANCELLED
+       Ã¢â€â€š      Ã¢â€â€š
+       Ã¢â€â€š      Ã¢â€â€Ã¢â€â‚¬Ã¢â€â‚¬ hold elapsed Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€“Âº EXPIRED
+       Ã¢â€â€Ã¢â€â‚¬Ã¢â€â‚¬ cancel Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€“Âº CANCELLED
 
 Anything else is a 409: a confirmed booking cannot be paid again, an expired booking is
 terminal, a hold cannot be expired before its deadline.
 
 ## Rules implemented (cahier des charges)
-- **Rule 2** — a booking holds seats only while the payment is pending; the delay is
+- **Rule 2** Ã¢â‚¬â€ a booking holds seats only while the payment is pending; the delay is
   `ticketflow.booking.hold-duration` (ISO-8601, default `PT15M`) and a scheduled sweep
   (`ticketflow.booking.sweep-interval`, milliseconds, default `60000`) expires overdue holds.
-- **Rule 3** — the five states above, transitions controlled here, each change recorded in
+- **Rule 3** Ã¢â‚¬â€ the five states above, transitions controlled here, each change recorded in
   `booking_transitions` with a reason and a timestamp.
-- **Rule 5** — creation is idempotent: repeat the same `idempotencyKey` and you get the same
+- **Rule 5** Ã¢â‚¬â€ creation is idempotent: repeat the same `idempotencyKey` and you get the same
   booking back (200 instead of 201); the same key with a different payload is a 409.
 
 ## Remote call to event-service (TP4)
 `EventClient` is a declarative OpenFeign client (`@FeignClient(name = "event-service")`,
-`GET /api/events/{id}`). It is injected in `BookingService`, never in the controller, and it
-carries **no `url`**: Eureka and Spring Cloud LoadBalancer resolve the service name, and the
-call never goes through the Gateway.
+`GET /api/events/{id}`). It is injected in `BookingService`, never in the controller. The
+name is resolved by Eureka and Spring Cloud LoadBalancer; there is deliberately no `url`
+attribute and the call never goes through the Gateway.
 
-`create()` calls it **before** writing anything:
-- the price is not sent by the caller any more: `unitPrice` is read from the event's
-  `ticketPrice`, so a booking can no longer carry an invented price;
-- an event that is not `PUBLISHED` (draft, closed, archived) is refused with 409;
-- a replayed `idempotencyKey` returns the stored booking **without** calling event-service.
+`create()` calls it **before** the idempotency lookup and before any write, exactly as the
+handout asks: when the call succeeds the existing logic runs; a remote error is never
+turned into a reservation. The reservation body keeps its `unitPrice` field, the contract
+of the previous step is not redefined.
 
 | Remote outcome | HTTP returned by booking-service |
 |---|---|
-| `200` with `status=PUBLISHED` | `201` (or `200` on an idempotent replay) |
-| `200` with another status | `409` `{"detail":"Event 12 is CLOSED ..."}` |
-| `404` (Feign `FeignException.NotFound`) | `404`, never turned into a success |
-| connection refused, timeout, `5xx` (`RetryableException`) | `503`, no booking written |
+| `200` | `201`, or `200` on an idempotent replay |
+| `404` (`FeignException.NotFound`) | `404`, empty body, never a success |
+| connection refused, timeout (`RetryableException`) | `503`, empty body, no booking written |
 
 Timeouts are bounded (`connect-timeout=2000`, `read-timeout=3000` in
 `spring.cloud.openfeign.client.config.default`, overridable from the Config Server): a slow
@@ -88,10 +86,11 @@ producer must not freeze the reservation flow.
     ./mvnw -pl services/config-server spring-boot:run
     ./mvnw -pl services/booking-service spring-boot:run
 
-    # eventId must exist and be PUBLISHED in event-service.
+    # eventId must exist in event-service.
     curl -i -X POST localhost:8083/api/bookings \
       -H 'Content-Type: application/json' \
-      -d '{"eventId":1,"customerId":42,"quantity":2,"idempotencyKey":"demo-1"}'
+      -d '{"eventId":1,"customerId":42,"quantity":2,"unitPrice":250.00,
+           "idempotencyKey":"demo-1"}'
 
     curl -X POST localhost:8083/api/bookings/1/payment \
       -H 'Content-Type: application/json' -d '{"outcome":"APPROVED"}'
@@ -100,7 +99,7 @@ producer must not freeze the reservation flow.
     # unknown event -> 404 ; event-service stopped -> 503
     curl -i -X POST localhost:8083/api/bookings \
       -H 'Content-Type: application/json' \
-      -d '{"eventId":999999,"customerId":42,"quantity":1}'
+      -d '{"eventId":999999,"customerId":42,"quantity":1,"unitPrice":250.00}'
 
 ## Run with Docker
     docker compose -f infra/docker-compose.yml up --build booking-service
